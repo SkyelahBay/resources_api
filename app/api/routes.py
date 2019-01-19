@@ -4,32 +4,39 @@ from flask import request
 from sqlalchemy import or_, func
 from sqlalchemy.orm.exc import MultipleResultsFound, NoResultFound
 
-from app.api import bp
-from app.models import Language, Resource, Category
+from app.api import bp, auth
+from app.models import Language, Resource, Category, Key
 from app import Config, db
 from app.utils import Paginator, standardize_response
 from dateutil import parser
 from datetime import datetime
+import uuid
 import logging
 
 logger = logging.getLogger()
 
 
 # Routes
-@bp.route('/resources', methods=['GET', 'POST'])
+@bp.route('/resources', methods=['GET'], endpoint='get_resources')
 def resources():
-    if request.method == 'GET':
-        return get_resources()
-    elif request.method == 'POST':
-        return create_resource(request.get_json(), db)
+    return get_resources()
 
 
-@bp.route('/resources/<int:id>', methods=['GET', 'PUT'])
+@bp.route('/resources', methods=['POST'], endpoint='create_resource')
+@auth.authenticate
+def post_resources():
+    return create_resource(request.get_json(), db)
+
+
+@bp.route('/resources/<int:id>', methods=['GET'], endpoint='get_resource')
 def resource(id):
-    if request.method == 'GET':
-        return get_resource(id)
-    elif request.method == 'PUT':
-        return set_resource(id, request.get_json(), db)
+    return get_resource(id)
+
+
+@bp.route('/resources/<int:id>', methods=['PUT'], endpoint='update_resource')
+@auth.authenticate
+def update_resource(id):
+    return set_resource(id, request.get_json(), db)
 
 
 @bp.route('/languages', methods=['GET'])
@@ -40,6 +47,26 @@ def languages():
 @bp.route('/categories', methods=['GET'])
 def categories():
     return get_categories()
+
+
+@bp.route('/apikey', methods=['POST'], endpoint='apikey')
+def apikey():
+    json = request.get_json()
+    user = auth.check_user_with_oc(json)
+
+    if not user:
+        errors = [{"code": "not-authorized"}]
+        return standardize_response(None, errors, "not authorized", 401)
+
+    try:
+        apikey = Key.query.filter_by(email=json.get('email')).first()
+        if not apikey:
+            return create_new_apikey(json.get('email'))
+        return standardize_response(apikey.serialize, None, "ok")
+    except Exception as e:
+        logger.error(e)
+        errors = [{"code": "internal-server-error"}]
+        return standardize_response(None, errors, "internal server error", 500)
 
 
 # Helpers
@@ -132,9 +159,13 @@ def get_languages():
     language_paginator = Paginator(Config.LANGUAGE_PAGINATOR, request)
     query = Language.query
 
-    language_list = [
-        language.serialize for language in language_paginator.items(query)
-    ]
+    try:
+        language_list = [
+            language.serialize for language in language_paginator.items(query)
+        ]
+    except Exception as e:
+        logger.error(e)
+        return standardize_response(None, [{"code": "bad-request"}], "bad request", 400)
 
     return standardize_response(language_list, None, "ok")
 
@@ -176,27 +207,32 @@ def get_attributes(json):
 def set_resource(id, json, db):
     resource = None
     resource = Resource.query.get(id)
+    logger.info(f"Updating resource. Old data: {resource.serialize}")
     langs, categ = get_attributes(json)
 
-    if resource:
-        if json.get('languages'):
-            resource.languages = langs
-        if json.get('category'):
-            resource.category = categ
-        if json.get('name'):
-            resource.name = json.get('name')
-        if json.get('url'):
-            resource.url = json.get('url')
-        if 'paid' in json:
-            resource.paid = json.get('paid')
-        if 'notes' in json:
-            resource.notes = json.get('notes')
+    try:
+        if resource:
+            if json.get('languages'):
+                resource.languages = langs
+            if json.get('category'):
+                resource.category = categ
+            if json.get('name'):
+                resource.name = json.get('name')
+            if json.get('url'):
+                resource.url = json.get('url')
+            if 'paid' in json:
+                resource.paid = json.get('paid')
+            if 'notes' in json:
+                resource.notes = json.get('notes')
 
-        db.session.commit()
+            db.session.commit()
 
-        return standardize_response(resource.serialize, None, "ok")
-    else:
-        return standardize_response({}, None, "ok")
+            return standardize_response(resource.serialize, None, "ok")
+        else:
+            return standardize_response({}, None, "ok")
+    except Exception as e:
+        logger.error(e)
+        return standardize_response(None, [{"code": "bad-request"}], "bad request", 400)
 
 
 def create_resource(json, db):
@@ -209,7 +245,28 @@ def create_resource(json, db):
         paid=json.get('paid'),
         notes=json.get('notes'))
 
-    db.session.add(new_resource)
-    db.session.commit()
+    try:
+        db.session.add(new_resource)
+        db.session.commit()
 
-    return standardize_response(new_resource.serialize, None, "ok")
+        return standardize_response(new_resource.serialize, None, "ok")
+    except Exception as e:
+        logger.error(e)
+        return standardize_response(None, [{"code": "bad-request"}], "bad request", 400)
+
+
+def create_new_apikey(email):
+    new_key = Key(
+        apikey=uuid.uuid4().hex,
+        email=email
+    )
+
+    try:
+        db.session.add(new_key)
+        db.session.commit()
+
+        return standardize_response(new_key.serialize, None, "ok")
+    except Exception as e:
+        logger.error(e)
+        errors = [{"code": "internal-server-error"}]
+        return standardize_response(None, errors, "internal server error", 500)

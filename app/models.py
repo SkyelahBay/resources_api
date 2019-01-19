@@ -36,6 +36,15 @@ class Resource(db.Model):
     @property
     def serialize(self):
         """Return object data in easily serializeable format"""
+        if self.created_at:
+            created = self.created_at.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            created = ""
+        if self.last_updated:
+            updated = self.last_updated.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            updated = ""
+
         return {
             'id': self.id,
             'name': self.name,
@@ -46,7 +55,9 @@ class Resource(db.Model):
             'notes': self.notes,
             'upvotes': self.upvotes,
             'downvotes': self.downvotes,
-            'times_clicked': self.times_clicked
+            'times_clicked': self.times_clicked,
+            'created_at': created,
+            'last_updated': updated
         }
 
     @property
@@ -136,3 +147,28 @@ class Language(db.Model):
 
     def __repr__(self):
         return f"<Language {self.name}>"
+
+
+class Key(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    apikey = db.Column(db.String, unique=True, nullable=False)
+    email = db.Column(db.String, unique=True, nullable=False)
+
+    @property
+    def serialize(self):
+        """Return object data in easily serializeable format"""
+        return {
+            'apikey': self.apikey,
+            'email': self.email
+        }
+
+    def __eq__(self, other):
+        if isinstance(other, Key):
+            return self.apikey == other.apikey
+        return False
+
+    def __hash__(self):
+        return hash(self.apikey)
+
+    def __repr__(self):
+        return f"<Key email={self.email} apikey={self.apikey}>"
